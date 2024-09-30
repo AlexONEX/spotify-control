@@ -1,18 +1,17 @@
-use std::{collections::HashMap, fmt::Display, io::Write, vec};
+use std::{collections::HashMap, fmt::Display, io::Write};
 
 use clap::{Parser, Subcommand};
-
 use notify_rust::{Hint, Notification};
 use serde::{Deserialize, Serialize};
 use zbus::{
     dbus_proxy,
-    zvariant::{OwnedValue, Value},
+    names::{BusName, Error as NamesError},
+    zvariant::{Array, OwnedValue},
 };
 
 #[dbus_proxy(
     interface = "org.mpris.MediaPlayer2.Player",
-    default_path = "/org/mpris/MediaPlayer2",
-    default_service = "org.mpris.MediaPlayer2.spotify"
+    default_path = "/org/mpris/MediaPlayer2"
 )]
 trait Player {
     fn play_pause(&self) -> zbus::Result<()>;
@@ -20,13 +19,68 @@ trait Player {
     fn previous(&self) -> zbus::Result<()>;
     fn open_uri(&self, uri: &str) -> zbus::Result<()>;
     #[dbus_proxy(property)]
-    fn metadata(&self) -> zbus::Result<Metadata>;
+    fn metadata(&self) -> zbus::Result<HashMap<String, OwnedValue>>;
 }
 
 #[derive(Debug)]
 pub enum Error {
     ZbusError(zbus::Error),
+    ZbusNamesError(NamesError),
     MetadataError(MetadataError),
+    ReqwestError(reqwest::Error),
+    NotificationError(notify_rust::error::Error),
+    IoError(std::io::Error),
+}
+
+impl std::error::Error for Error {}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::ZbusNamesError(e) => write!(f, "DBus names error: {}", e),
+            Error::ZbusError(e) => write!(f, "DBus error: {}", e),
+            Error::MetadataError(e) => write!(f, "Metadata error: {}", e),
+            Error::ReqwestError(e) => write!(f, "HTTP request error: {}", e),
+            Error::NotificationError(e) => write!(f, "Notification error: {}", e),
+            Error::IoError(e) => write!(f, "I/O error: {}", e),
+        }
+    }
+}
+
+impl From<zbus::Error> for Error {
+    fn from(err: zbus::Error) -> Self {
+        Error::ZbusError(err)
+    }
+}
+
+impl From<NamesError> for Error {
+    fn from(err: NamesError) -> Self {
+        Error::ZbusNamesError(err)
+    }
+}
+
+impl From<MetadataError> for Error {
+    fn from(err: MetadataError) -> Self {
+        Error::MetadataError(err)
+    }
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(err: reqwest::Error) -> Self {
+        Error::ReqwestError(err)
+    }
+}
+
+impl From<notify_rust::error::Error> for Error {
+    fn from(err: notify_rust::error::Error) -> Self {
+        Error::NotificationError(err)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::IoError(err)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -35,54 +89,60 @@ pub enum MetadataError {
     InvalidValueType(String),
 }
 
-#[derive(Debug)]
+impl std::error::Error for MetadataError {}
+
+impl Display for MetadataError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MetadataError::MissingKey(key) => write!(f, "Missing metadata key: {}", key),
+            MetadataError::InvalidValueType(key) => {
+                write!(f, "Invalid value type for key: {}", key)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Metadata {
-    r#title: String,
+    title: String,
     artists: Vec<String>,
     album: String,
     artwork: String,
 }
 
-impl TryInto<OwnedValue> for Metadata {
-    type Error = zbus::Error;
-    fn try_into(self) -> zbus::Result<OwnedValue> {
-        let mut map = HashMap::new();
-        map.insert("xesam:title".to_string(), Value::new(self.title));
-        map.insert("xesam:artist".to_string(), Value::new(self.artists));
-        map.insert("xesam:album".to_string(), Value::new(self.album));
-        map.insert("mpris:artUrl".to_string(), Value::new(self.artwork));
-        Ok(Value::Dict(map.into()).into())
+impl TryFrom<HashMap<String, OwnedValue>> for Metadata {
+    type Error = MetadataError;
+
+    fn try_from(map: HashMap<String, OwnedValue>) -> Result<Self, Self::Error> {
+        Ok(Metadata {
+            title: get_string(&map, "xesam:title")?,
+            artists: get_string_vec(&map, "xesam:artist")?,
+            album: get_string(&map, "xesam:album")?,
+            artwork: get_string(&map, "mpris:artUrl")?,
+        })
     }
 }
 
-impl Into<Metadata> for OwnedValue {
-    fn into(self) -> Metadata {
-        let mut map: HashMap<String, Value<'_>> = HashMap::new();
-        if let Value::Dict(dict) = self.into() {
-            map = dict.try_into().unwrap();
-        }
-        let title = map.get("xesam:title").cloned().unwrap().downcast().unwrap();
-        let artists = map
-            .get("xesam:artist")
-            .cloned()
-            .unwrap()
-            .downcast()
-            .unwrap();
-        let album = map.get("xesam:album").cloned().unwrap().downcast().unwrap();
-        let artwork = map
-            .get("mpris:artUrl")
-            .cloned()
-            .unwrap()
-            .downcast()
-            .unwrap();
+fn get_string(map: &HashMap<String, OwnedValue>, key: &str) -> Result<String, MetadataError> {
+    map.get(key)
+        .and_then(|v| v.downcast_ref::<str>().map(|s| s.to_string()))
+        .ok_or_else(|| MetadataError::MissingKey(key.to_string()))
+}
 
-        Metadata {
-            title,
-            artists,
-            album,
-            artwork,
-        }
-    }
+fn get_string_vec(
+    map: &HashMap<String, OwnedValue>,
+    key: &str,
+) -> Result<Vec<String>, MetadataError> {
+    map.get(key)
+        .and_then(|v| v.downcast_ref::<Array>())
+        .map(|array| {
+            array
+                .get()
+                .iter()
+                .filter_map(|v| v.downcast_ref::<str>().map(|s| s.to_string()))
+                .collect()
+        })
+        .ok_or_else(|| MetadataError::MissingKey(key.to_string()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -122,11 +182,9 @@ enum PlayMode {
 }
 
 #[derive(Debug, Parser)]
-#[clap(author, about, version, long_about = None)]
+#[clap(author, version, about, long_about = None)]
 struct Args {
     /// Changes the service that the DBus commands are sent to
-    /// If changed, the play-song commands won't work, and the now-playing might not work
-    ///
     #[clap(
         short,
         long,
@@ -185,73 +243,46 @@ struct Album {
     name: String,
 }
 
-async fn search(query: &str) -> Vec<Track> {
+async fn search(query: &str) -> Result<Vec<Track>, Error> {
     let url = format!(
         "https://spotify-search-api-test.herokuapp.com/search/tracks?track={}",
         query.replace(' ', "%20")
     );
-    let res: Response = reqwest::get(&url).await.unwrap().json().await.unwrap();
-    res.tracks.items
+    let res: Response = reqwest::get(&url).await?.json().await?;
+    Ok(res.tracks.items)
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Error> {
     let args = Args::parse();
 
-    let conn = zbus::Connection::session().await.unwrap();
+    let conn = zbus::Connection::session().await?;
 
     let proxy = PlayerProxy::builder(&conn)
-        .destination(args.service_name)
-        .unwrap()
+        .destination(BusName::try_from(args.service_name.clone())?)?
         .build()
-        .await
-        .unwrap();
+        .await?;
 
     match args.action {
-        Commands::Next => proxy.next().await.unwrap(),
-        Commands::Previous => proxy.previous().await.unwrap(),
-        Commands::PlayPause => proxy.play_pause().await.unwrap(),
-        Commands::NowPlaying => what(proxy.metadata().await.unwrap().try_into().unwrap()).await,
-        Commands::PlaySong { mode } => play_song(&proxy, mode).await,
-    }
-}
-
-async fn play_song<'proxy>(proxy: &PlayerProxy<'proxy>, mode: PlayMode) {
-    match mode {
-        PlayMode::Uri { uri } => proxy.open_uri(&uri).await.unwrap(),
-        PlayMode::Search { query, list, count } => {
-            let query = query.join(" ");
-            let track = search(&query).await;
-            if list {
-                for (i, track) in track.iter().take(count).enumerate() {
-                    println!("{} - {}", i, track);
-                }
-                print!("Enter a number to play: ");
-                std::io::stdout().flush().unwrap();
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input).unwrap();
-                let input = input.trim().parse::<usize>().unwrap();
-                let track = track.get(input).unwrap();
-                println!("Playing {}", track);
-                let uri = format!("spotify:track:{}", track.id);
-                proxy.open_uri(&uri).await.unwrap()
-            } else if let Some(track) = track.first() {
-                println!("Playing {}", track);
-                let uri = format!("spotify:track:{}", track.id);
-                proxy.open_uri(&uri).await.unwrap()
-            } else {
-                println!("No track found for {}", query);
-            }
+        Commands::Next => proxy.next().await?,
+        Commands::Previous => proxy.previous().await?,
+        Commands::PlayPause => proxy.play_pause().await?,
+        Commands::NowPlaying => {
+            let metadata = proxy.metadata().await?;
+            what(metadata.try_into()?).await?;
         }
+        Commands::PlaySong { mode } => play_song(&proxy, mode).await?,
     }
+
+    Ok(())
 }
 
-async fn what(metadata: Metadata) {
-    let res = reqwest::get(&metadata.artwork).await.unwrap();
-    let bytes = res.bytes().await.unwrap();
+async fn what(metadata: Metadata) -> Result<(), Error> {
+    let res = reqwest::get(&metadata.artwork).await?;
+    let bytes = res.bytes().await?;
     let tmp = temp_file::with_contents(&bytes);
 
-    let _not = Notification::new()
+    Notification::new()
         .appname("Spotify Notify")
         .summary(&metadata.title)
         .body(&format!(
@@ -261,6 +292,138 @@ async fn what(metadata: Metadata) {
         ))
         .image_path(tmp.path().to_str().unwrap())
         .hint(Hint::Category("music".to_string()))
-        .show()
-        .unwrap();
+        .show()?;
+
+    Ok(())
+}
+
+async fn play_song<'proxy>(proxy: &PlayerProxy<'proxy>, mode: PlayMode) -> Result<(), Error> {
+    match mode {
+        PlayMode::Uri { uri } => {
+            proxy.open_uri(&uri).await?;
+            Ok(())
+        }
+        PlayMode::Search { query, list, count } => {
+            let query = query.join(" ");
+            let tracks = search(&query).await?;
+            if list {
+                for (i, track) in tracks.iter().take(count).enumerate() {
+                    println!("{} - {}", i, track);
+                }
+                print!("Enter a number to play: ");
+                std::io::stdout().flush()?;
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                let input = input.trim().parse::<usize>().unwrap();
+                if let Some(track) = tracks.get(input) {
+                    println!("Playing {}", track);
+                    let uri = format!("spotify:track:{}", track.id);
+                    proxy.open_uri(&uri).await?;
+                } else {
+                    println!("Invalid selection");
+                }
+            } else if let Some(track) = tracks.first() {
+                println!("Playing {}", track);
+                let uri = format!("spotify:track:{}", track.id);
+                proxy.open_uri(&uri).await?;
+            } else {
+                println!("No track found for {}", query);
+            }
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockall::mock;
+    use mockall::predicate::*;
+
+    mock! {
+        Player {}
+        #[async_trait]
+        trait Player {
+            async fn play_pause(&self) -> zbus::Result<()>;
+            async fn next(&self) -> zbus::Result<()>;
+            async fn previous(&self) -> zbus::Result<()>;
+            async fn open_uri(&self, uri: &str) -> zbus::Result<()>;
+            async fn metadata(&self) -> zbus::Result<HashMap<String, OwnedValue>>;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_play_pause() {
+        let mut mock = MockPlayer::new();
+        mock.expect_play_pause().times(1).returning(|| Ok(()));
+
+        let proxy = mock;
+        proxy.play_pause().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_next() {
+        let mut mock = MockPlayer::new();
+        mock.expect_next().times(1).returning(|| Ok(()));
+
+        let proxy = mock;
+        proxy.next().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_previous() {
+        let mut mock = MockPlayer::new();
+        mock.expect_previous().times(1).returning(|| Ok(()));
+
+        let proxy = mock;
+        proxy.previous().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_open_uri() {
+        let mut mock = MockPlayer::new();
+        mock.expect_open_uri()
+            .with(eq("spotify:track:1234567890"))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let proxy = mock;
+        proxy.open_uri("spotify:track:1234567890").await.unwrap();
+    }
+
+    #[test]
+    fn test_metadata_conversion() {
+        let mut map = HashMap::new();
+        map.insert("xesam:title".to_string(), OwnedValue::from("Test Title"));
+        map.insert(
+            "xesam:artist".to_string(),
+            OwnedValue::from(vec!["Test Artist".to_string()]),
+        );
+        map.insert("xesam:album".to_string(), OwnedValue::from("Test Album"));
+        map.insert(
+            "mpris:artUrl".to_string(),
+            OwnedValue::from("http://example.com/art.jpg"),
+        );
+
+        let metadata: Metadata = map.try_into().unwrap();
+        assert_eq!(metadata.title, "Test Title");
+        assert_eq!(metadata.artists, vec!["Test Artist"]);
+        assert_eq!(metadata.album, "Test Album");
+        assert_eq!(metadata.artwork, "http://example.com/art.jpg");
+    }
+
+    #[test]
+    fn test_metadata_conversion_missing_key() {
+        let mut map = HashMap::new();
+        map.insert("xesam:title".to_string(), OwnedValue::from("Test Title"));
+        // Missing "xesam:artist" key
+        map.insert("xesam:album".to_string(), OwnedValue::from("Test Album"));
+        map.insert(
+            "mpris:artUrl".to_string(),
+            OwnedValue::from("http://example.com/art.jpg"),
+        );
+
+        let result: Result<Metadata, MetadataError> = map.try_into();
+        assert!(matches!(result, Err(MetadataError::MissingKey(key)) if key == "xesam:artist"));
+    }
 }
