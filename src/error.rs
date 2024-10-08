@@ -1,3 +1,4 @@
+use crate::metadata;
 use std::fmt::Display;
 use zbus::names::Error as NamesError;
 
@@ -8,6 +9,7 @@ pub enum Error {
     Reqwest(reqwest::Error),
     Notification(notify_rust::error::Error),
     Io(std::io::Error),
+    Metadata(metadata::MetadataError),
 }
 
 impl std::error::Error for Error {}
@@ -19,15 +21,21 @@ impl Display for Error {
             Error::Zbus(e) => write!(f, "DBus error: {}", e),
             Error::Reqwest(e) => write!(f, "HTTP request error: {}", e),
             Error::Notification(e) => write!(f, "Notification error: {}", e),
+            Error::Metadata(e) => write!(f, "Metadata error: {}", e),
             Error::Io(e) => write!(f, "I/O error: {}", e),
         }
     }
 }
 
-// Update the From implementations accordingly
 impl From<zbus::Error> for Error {
     fn from(err: zbus::Error) -> Self {
         Error::Zbus(err)
+    }
+}
+
+impl From<metadata::MetadataError> for Error {
+    fn from(err: metadata::MetadataError) -> Self {
+        Error::Metadata(err)
     }
 }
 
