@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
-use crate::error::Error;
-
 #[derive(Serialize, Deserialize, Debug)]
 struct Response {
     tracks: Tracks,
@@ -49,7 +47,7 @@ pub struct Album {
     pub name: String,
 }
 
-pub async fn search(query: &str) -> Result<Vec<Track>, Error> {
+pub async fn search(query: &str) -> Result<Vec<Track>, crate::error::Error> {
     let url = format!(
         "https://spotify-search-api-test.herokuapp.com/search/tracks?track={}",
         query.replace(' ', "%20")
