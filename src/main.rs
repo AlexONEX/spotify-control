@@ -1,6 +1,6 @@
 use clap::Parser;
 use error::Error;
-use player::{Commands, Player};
+use player::Commands;
 
 mod error;
 mod metadata;
