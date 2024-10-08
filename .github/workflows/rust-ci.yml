@@ -1,0 +1,36 @@
+name: Rust CI
+
+on:
+  push:
+    branches:
+      - '**'        # trigger the workflow on push to any branch
+  pull_request:
+    branches:
+      - main        # trigger the workflow on PRs to main
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install latest stable
+      uses: actions-rs/toolchain@v1
+      with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+    - name: Build
+      run: cargo build --verbose --all-features --all-targets
+
+    - name: Run tests
+      run: cargo test --verbose
+
+    - name: Check formatting
+      run: cargo fmt -- --check
+
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
