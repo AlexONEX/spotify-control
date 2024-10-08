@@ -12,7 +12,7 @@ use zbus::zvariant::OwnedValue;
     interface = "org.mpris.MediaPlayer2.Player",
     default_path = "/org/mpris/MediaPlayer2"
 )]
-pub trait Player {
+trait PlayerProxy {
     fn play_pause(&self) -> zbus::Result<()>;
     fn next(&self) -> zbus::Result<()>;
     fn previous(&self) -> zbus::Result<()>;
@@ -47,11 +47,9 @@ pub enum PlayMode {
     Search {
         /// You get the best success with "search title artist"
         query: Vec<String>,
-
         /// Allows picking from a list of songs instead of starting the first
         #[clap(short, long, action)]
         list: bool,
-
         #[clap(short, long, default_value = "5")]
         count: usize,
     },
@@ -68,7 +66,6 @@ pub struct Args {
         default_value = "org.mpris.MediaPlayer2.spotify"
     )]
     pub service_name: String,
-
     #[clap(subcommand)]
     pub action: Commands,
 }
@@ -77,7 +74,6 @@ pub async fn what(metadata: Metadata) -> Result<(), Error> {
     let res = reqwest::get(&metadata.artwork).await?;
     let bytes = res.bytes().await?;
     let tmp = temp_file::with_contents(&bytes);
-
     Notification::new()
         .appname("Spotify Notify")
         .summary(&metadata.title)
@@ -89,11 +85,10 @@ pub async fn what(metadata: Metadata) -> Result<(), Error> {
         .image_path(tmp.path().to_str().unwrap())
         .hint(Hint::Category("music".to_string()))
         .show()?;
-
     Ok(())
 }
 
-pub async fn play_song(proxy: &impl Player, mode: PlayMode) -> Result<(), Error> {
+pub async fn play_song(proxy: &PlayerProxy, mode: PlayMode) -> Result<(), Error> {
     match mode {
         PlayMode::Uri { uri } => {
             proxy.open_uri(&uri).await?;

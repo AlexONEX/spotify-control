@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - '**'        # trigger the workflow on push to any branch
-  pull_request:
-    branches:
-      - main        # trigger the workflow on PRs to main
 
 env:
   CARGO_TERM_COLOR: always
