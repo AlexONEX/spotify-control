@@ -3,6 +3,14 @@ use std::fmt::Display;
 use zbus::zvariant::{Array, OwnedValue};
 
 #[derive(Debug, Clone)]
+pub struct Metadata {
+    pub title: String,
+    pub artists: Vec<String>,
+    pub album: String,
+    pub artwork: String,
+}
+
+#[derive(Debug, Clone)]
 pub enum MetadataError {
     MissingKey(String),
     InvalidValueType(String),
@@ -19,14 +27,6 @@ impl Display for MetadataError {
             }
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct Metadata {
-    pub title: String,
-    pub artists: Vec<String>,
-    pub album: String,
-    pub artwork: String,
 }
 
 impl TryFrom<HashMap<String, OwnedValue>> for Metadata {
