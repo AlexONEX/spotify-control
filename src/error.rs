@@ -5,7 +5,6 @@ use zbus::names::Error as NamesError;
 pub enum Error {
     Zbus(zbus::Error),
     ZbusNames(NamesError),
-    Metadata(crate::metadata::MetadataError),
     Reqwest(reqwest::Error),
     Notification(notify_rust::error::Error),
     Io(std::io::Error),
@@ -18,7 +17,6 @@ impl Display for Error {
         match self {
             Error::ZbusNames(e) => write!(f, "DBus names error: {}", e),
             Error::Zbus(e) => write!(f, "DBus error: {}", e),
-            Error::Metadata(e) => write!(f, "Metadata error: {}", e),
             Error::Reqwest(e) => write!(f, "HTTP request error: {}", e),
             Error::Notification(e) => write!(f, "Notification error: {}", e),
             Error::Io(e) => write!(f, "I/O error: {}", e),
@@ -36,12 +34,6 @@ impl From<zbus::Error> for Error {
 impl From<NamesError> for Error {
     fn from(err: NamesError) -> Self {
         Error::ZbusNames(err)
-    }
-}
-
-impl From<crate::metadata::MetadataError> for Error {
-    fn from(err: crate::metadata::MetadataError) -> Self {
-        Error::Metadata(err)
     }
 }
 
