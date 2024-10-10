@@ -13,6 +13,7 @@ pub struct Metadata {
 #[derive(Debug, Clone)]
 pub enum MetadataError {
     MissingKey(String),
+    #[allow(dead_code)]
     InvalidValueType(String),
 }
 

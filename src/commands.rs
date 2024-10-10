@@ -27,6 +27,7 @@ pub enum Commands {
     /// Show a notification with the current song
     NowPlaying,
     /// Play a song
+    #[clap(name = "play-song")]
     PlaySong {
         #[clap(subcommand)]
         mode: PlayMode,
