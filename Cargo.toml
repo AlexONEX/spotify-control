@@ -17,5 +17,5 @@ async-trait = "0.1.58"
 
 [[test]]
 name = "player_tests"
-path = "tests/player_tests.rs"
+path = "tests/tests.rs"
 
